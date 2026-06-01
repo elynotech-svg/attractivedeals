@@ -5,11 +5,13 @@ import unittest
 from pathlib import Path
 
 from scripts.deals_channel import (
+    AffiliateConfig,
     FeedConfig,
     FilterConfig,
     TelegramConfig,
     WhatsAppConfig,
     WorkflowConfig,
+    build_cuelinks_url,
     filter_deals,
     load_config,
     format_deal,
@@ -137,6 +139,55 @@ class DealsChannelTests(unittest.TestCase):
             self.assertEqual(summary.telegram_posted, 0)
             self.assertTrue(output_file.exists())
             self.assertIn("Mixer 30% off", output_file.read_text(encoding="utf-8"))
+
+    def test_manual_feed_with_cuelinks_wraps_urls(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_file = Path(tmp_dir) / "whatsapp.txt"
+            config = WorkflowConfig(
+                feeds=[
+                    FeedConfig(
+                        name="manual",
+                        type="manual",
+                        items=[
+                            {
+                                "title": "Shoes 50% off",
+                                "url": "https://www.ajio.com/shoes/p/123",
+                                "price": "999",
+                                "original_price": "1998",
+                                "category": "Fashion",
+                            }
+                        ],
+                        currency="Rs. ",
+                    )
+                ],
+                filters=FilterConfig(min_discount_percent=25, require_discount_data=True),
+                affiliate=AffiliateConfig(
+                    enabled=True,
+                    network="cuelinks",
+                    channel_id="7102",
+                    required=True,
+                ),
+                telegram=TelegramConfig(enabled=False),
+                whatsapp=WhatsAppConfig(output_file=str(output_file)),
+            )
+
+            summary = run_workflow(config, skip_telegram=True)
+            output = output_file.read_text(encoding="utf-8")
+
+            self.assertEqual(summary.fetched, 1)
+            self.assertEqual(summary.accepted, 1)
+            self.assertEqual(summary.errors, [])
+            self.assertIn("https://linksredirect.com/?", output)
+            self.assertIn("cid=7102", output)
+            self.assertIn("url=https%3A%2F%2Fwww.ajio.com%2Fshoes%2Fp%2F123", output)
+
+    def test_build_cuelinks_url_does_not_double_wrap(self):
+        wrapped = build_cuelinks_url("https://www.tatacliq.com/product", "7102")
+        self.assertEqual(
+            build_cuelinks_url(wrapped, "7102"),
+            wrapped,
+        )
+
 
     def test_run_workflow_skips_unconfigured_feed_urls(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

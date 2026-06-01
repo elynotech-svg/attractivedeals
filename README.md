@@ -23,6 +23,32 @@ Zomato, BigBasket, Instamart, Zepto, Ajio, and Tata CLiQ. Dry runs skip
 Telegram posting but still write the WhatsApp output file.
 
 
+
+## Simplest setup with Cuelinks
+
+If you do not have private feed/API URLs yet, use the simple Cuelinks mode:
+
+1. Create a Cuelinks account.
+2. Get your Channel ID from **Cuelinks dashboard > Account > My Channels**.
+3. Paste normal product URLs into `config/simple-cuelinks.json`.
+4. Run the script with `CUELINKS_CHANNEL_ID`.
+
+```bash
+export CUELINKS_CHANNEL_ID="your-cuelinks-channel-id"
+python3 scripts/deals_channel.py --config config/simple-cuelinks.json --dry-run
+```
+
+The script converts normal merchant URLs into Cuelinks redirect URLs like:
+
+```text
+https://linksredirect.com/?cid=YOUR_CHANNEL_ID&source=linkkit&url=...
+```
+
+This lets you start with one Cuelinks account instead of separate Amazon,
+Flipkart, Ajio, Tata CLiQ, BigBasket, Instamart, Zepto, and Zomato feed/API
+integrations. Later, when you get real feed/API URLs, switch back to
+`config/deals.json`.
+
 ## Merchant feed URL environment variables
 
 Affiliate feed/API URLs for these merchants are usually private to your approved
@@ -147,16 +173,20 @@ workflow in two ways:
 
 - Manual run from the GitHub **Actions** tab with `workflow_dispatch`. Manual
   runs default to dry-run, so they create the WhatsApp file without posting to
-  Telegram unless you turn dry-run off.
+  Telegram unless you turn dry-run off. For the easiest start, choose
+  `config/simple-cuelinks.json` in the `config_path` input.
 - Scheduled run every 6 hours using GitHub cron. Scheduled runs are real runs:
   they fetch deals and post to Telegram when feed URL secrets and Telegram
-  secrets are configured.
+  secrets are configured. If you only use `config/simple-cuelinks.json`, the
+  workflow posts the deals you pasted in that file; it does not discover new
+  deals automatically without a feed/API source.
 
 Add your secrets in GitHub under **Settings > Secrets and variables > Actions**:
 
 ```text
 TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
+CUELINKS_CHANNEL_ID
 AMAZON_IN_FEED_URL
 FLIPKART_FEED_URL
 ZOMATO_FEED_URL
@@ -167,9 +197,11 @@ AJIO_FEED_URL
 TATACLIQ_FEED_URL
 ```
 
-Only the feed URL secrets you actually use are required. Optional auth secrets
-like `FLIPKART_AUTH_HEADER` or `AJIO_API_KEY` can be added if your affiliate
-provider requires request headers. After each run, GitHub uploads
+For the simple Cuelinks setup, `CUELINKS_CHANNEL_ID`, `TELEGRAM_BOT_TOKEN`, and
+`TELEGRAM_CHAT_ID` are enough. For feed/API setup, only the feed URL secrets you
+actually use are required. Optional auth secrets like `FLIPKART_AUTH_HEADER` or
+`AJIO_API_KEY` can be added if your affiliate provider requires request headers.
+After each run, GitHub uploads
 `out/whatsapp_deals.txt` as a workflow artifact so you can download the
 WhatsApp-ready copy.
 
