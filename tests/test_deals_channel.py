@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from scripts.deals_channel import (
     WhatsAppConfig,
     WorkflowConfig,
     filter_deals,
+    load_config,
     format_deal,
     parse_feed,
     run_workflow,
@@ -135,6 +137,53 @@ class DealsChannelTests(unittest.TestCase):
             self.assertEqual(summary.telegram_posted, 0)
             self.assertTrue(output_file.exists())
             self.assertIn("Mixer 30% off", output_file.read_text(encoding="utf-8"))
+
+    def test_run_workflow_skips_unconfigured_feed_urls(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_file = Path(tmp_dir) / "whatsapp.txt"
+            config = WorkflowConfig(
+                feeds=[FeedConfig(name="missing-feed", url="")],
+                telegram=TelegramConfig(enabled=False),
+                whatsapp=WhatsAppConfig(output_file=str(output_file)),
+            )
+
+            summary = run_workflow(config, skip_telegram=True)
+
+            self.assertEqual(summary.fetched, 0)
+            self.assertEqual(summary.accepted, 0)
+            self.assertEqual(summary.skipped_feeds, ["missing-feed: missing feed URL"])
+            self.assertTrue(output_file.exists())
+
+    def test_load_config_expands_env_placeholders_and_defaults(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_file = Path(tmp_dir) / "deals.json"
+            config_file.write_text(
+                json.dumps(
+                    {
+                        "feeds": [
+                            {
+                                "name": "env-feed",
+                                "url": "${TEST_DEALS_FEED_URL:-https://fallback.example/feed.json}",
+                                "headers": {
+                                    "Authorization": "${TEST_DEALS_AUTH_HEADER:-}",
+                                    "x-api-key": "${TEST_DEALS_API_KEY:-abc123}",
+                                },
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.environ["TEST_DEALS_FEED_URL"] = "https://partner.example/feed.json"
+            try:
+                config = load_config(config_file)
+            finally:
+                os.environ.pop("TEST_DEALS_FEED_URL", None)
+
+            self.assertEqual(config.feeds[0].url, "https://partner.example/feed.json")
+            self.assertEqual(config.feeds[0].headers["Authorization"], "")
+            self.assertEqual(config.feeds[0].headers["x-api-key"], "abc123")
+
 
 
 if __name__ == "__main__":

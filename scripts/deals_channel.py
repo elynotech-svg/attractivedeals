@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import datetime as dt
 import html
 import json
 import os
@@ -25,12 +24,14 @@ from typing import Any
 
 
 DEFAULT_USER_AGENT = "deals-channel-workflow/1.0"
+ENV_PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
 
 
 @dataclass
 class FeedConfig:
     name: str
     url: str
+    enabled: bool = True
     type: str = "auto"
     headers: dict[str, str] = field(default_factory=dict)
     items_path: str | None = None
@@ -108,12 +109,13 @@ class RunSummary:
     telegram_posted: int = 0
     telegram_failed: int = 0
     whatsapp_file: str | None = None
+    skipped_feeds: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
 def load_config(path: Path) -> WorkflowConfig:
     with path.open("r", encoding="utf-8") as config_file:
-        raw = json.load(config_file)
+        raw = expand_config_env(json.load(config_file))
 
     feeds = [FeedConfig(**feed) for feed in raw.get("feeds", [])]
     if not feeds:
@@ -128,14 +130,38 @@ def load_config(path: Path) -> WorkflowConfig:
     )
 
 
+def expand_config_env(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: expand_config_env(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [expand_config_env(child) for child in value]
+    if isinstance(value, str):
+        return expand_env_placeholders(value)
+    return value
+
+
+def expand_env_placeholders(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        env_name = match.group(1)
+        default = match.group(2)
+        if env_name in os.environ:
+            return os.environ[env_name]
+        return default if default is not None else ""
+
+    return ENV_PLACEHOLDER_RE.sub(replace, value)
+
+
 def fetch_text(url: str, headers: dict[str, str] | None = None, timeout: int = 20) -> str:
+    if not url:
+        raise ValueError("Feed URL is empty. Set the merchant feed URL in config/deals.json or env vars.")
+
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme in ("", "file"):
         path = Path(urllib.parse.unquote(parsed.path if parsed.scheme else url))
         return path.read_text(encoding="utf-8")
 
     request_headers = {"User-Agent": DEFAULT_USER_AGENT}
-    request_headers.update(headers or {})
+    request_headers.update({key: value for key, value in (headers or {}).items() if value})
     request = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         charset = response.headers.get_content_charset() or "utf-8"
@@ -466,6 +492,12 @@ def run_workflow(
     all_deals: list[Deal] = []
 
     for feed in config.feeds:
+        if not feed.enabled:
+            summary.skipped_feeds.append(f"{feed.name}: disabled")
+            continue
+        if not feed.url:
+            summary.skipped_feeds.append(f"{feed.name}: missing feed URL")
+            continue
         try:
             deals = parse_feed(feed)
             summary.fetched += len(deals)
@@ -582,7 +614,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if summary.telegram_failed:
         return 1
-    if summary.fetched == 0 and summary.errors:
+    if summary.fetched == 0 and (summary.errors or summary.skipped_feeds):
         return 1
     return 0
 

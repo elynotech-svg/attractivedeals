@@ -15,11 +15,52 @@ within each run.
 ## Quick start
 
 ```bash
-cp config/deals.example.json config/deals.json
 python3 scripts/deals_channel.py --config config/deals.json --dry-run
 ```
 
-Dry runs skip Telegram posting but still write the WhatsApp output file.
+`config/deals.json` is pre-filled with placeholders for Amazon India, Flipkart,
+Zomato, BigBasket, Instamart, Zepto, Ajio, and Tata CLiQ. Dry runs skip
+Telegram posting but still write the WhatsApp output file.
+
+
+## Merchant feed URL environment variables
+
+Affiliate feed/API URLs for these merchants are usually private to your approved
+partner account or affiliate network. Set the feed URL variables you have access
+to before running:
+
+```bash
+export AMAZON_IN_FEED_URL="https://your-approved-amazon-feed-or-proxy"
+export FLIPKART_FEED_URL="https://your-approved-flipkart-feed"
+export ZOMATO_FEED_URL="https://your-approved-zomato-feed"
+export BIGBASKET_FEED_URL="https://your-approved-bigbasket-feed"
+export INSTAMART_FEED_URL="https://your-approved-instamart-feed"
+export ZEPTO_FEED_URL="https://your-approved-zepto-feed"
+export AJIO_FEED_URL="https://your-approved-ajio-feed"
+export TATACLIQ_FEED_URL="https://your-approved-tatacliq-feed"
+```
+
+Optional request headers can be set per merchant when your provider requires
+them:
+
+```bash
+export FLIPKART_AUTH_HEADER="Bearer your-token"
+export FLIPKART_API_KEY="your-api-key"
+```
+
+Use the same pattern for other merchants, for example
+`AMAZON_IN_AUTH_HEADER`, `AJIO_API_KEY`, or `TATACLIQ_AUTH_HEADER`. If a feed
+uses custom JSON field names, override those too, for example:
+
+```bash
+export AJIO_ITEMS_PATH="data.products"
+export AJIO_URL_FIELD="deeplink"
+export AJIO_ORIGINAL_PRICE_FIELD="mrp"
+```
+
+Amazon India's Product Advertising API is a signed POST API rather than a simple
+feed URL. For this workflow, use an approved feed/export URL or a small PA-API
+proxy that returns JSON or RSS.
 
 ## Configure feeds
 
