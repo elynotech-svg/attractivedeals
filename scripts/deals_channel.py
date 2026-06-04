@@ -46,6 +46,8 @@ class FeedConfig:
     coupon_field: str = "coupon"
     category_field: str = "category"
     description_field: str = "description"
+    short_url_field: str = "short_url"
+    image_url_field: str = "image_url"
     currency: str = ""
 
 
@@ -67,6 +69,14 @@ class TelegramConfig:
     disable_web_page_preview: bool = False
     timeout_seconds: int = 15
     required: bool = False
+    post_style: str = "per_deal"
+    batch_size: int = 3
+    batch_headline: str = ""
+    batch_headline_template: str = "{headline} : Upto {max_discount}% Off"
+    batch_photo_url: str = ""
+    batch_photo_url_env: str = "TELEGRAM_BATCH_PHOTO_URL"
+    batch_use_deal_image: bool = True
+    batch_link_format: str = "Link {index} : {url}"
 
 
 @dataclass
@@ -120,6 +130,8 @@ class Deal:
     coupon: str | None = None
     category: str | None = None
     description: str | None = None
+    short_url: str | None = None
+    image_url: str | None = None
     currency: str = ""
 
     @property
@@ -263,6 +275,8 @@ def parse_json_items(feed: FeedConfig, items: list[Any]) -> list[Deal]:
                 coupon=clean_optional_text(get_nested(item, feed.coupon_field)),
                 category=clean_optional_text(get_nested(item, feed.category_field)),
                 description=clean_optional_text(get_nested(item, feed.description_field)),
+                short_url=clean_optional_text(get_nested(item, feed.short_url_field)),
+                image_url=clean_optional_text(get_nested(item, feed.image_url_field)),
                 currency=feed.currency,
             )
         )
@@ -516,6 +530,67 @@ def normalize_hashtag(value: str) -> str:
     return f"#{tag.lower()}" if tag else ""
 
 
+
+
+def chunk_deals(deals: list[Deal], size: int) -> list[list[Deal]]:
+    if size <= 0:
+        return [deals]
+    return [deals[index : index + size] for index in range(0, len(deals), size)]
+
+
+def max_discount_percent(deals: list[Deal]) -> int:
+    values = [deal.discount_percent for deal in deals if deal.discount_percent is not None]
+    return int(max(values)) if values else 0
+
+
+def deal_link_url(deal: Deal) -> str:
+    return deal.short_url or deal.url
+
+
+def format_batch_headline(deals: list[Deal], hashtags: list[str], telegram: TelegramConfig) -> str:
+    max_discount = max_discount_percent(deals)
+    if telegram.batch_headline.strip():
+        headline = telegram.batch_headline.strip()
+        if any(token in headline for token in ("{max_discount}", "{count}", "{headline}")):
+            tag_line = " ".join(build_hashtags(hashtags, None))
+            return headline.format(
+                headline=tag_line,
+                max_discount=max_discount,
+                count=len(deals),
+            )
+        if max_discount > 0 and "upto" not in headline.lower():
+            return f"{headline} : Upto {max_discount}% Off"
+        return headline
+    tag_line = " ".join(build_hashtags(hashtags, None))
+    return telegram.batch_headline_template.format(
+        headline=tag_line,
+        max_discount=max_discount,
+        count=len(deals),
+    )
+
+
+def format_batch_caption(deals: list[Deal], hashtags: list[str], telegram: TelegramConfig) -> str:
+    lines = [format_batch_headline(deals, hashtags, telegram), ""]
+    for index, deal in enumerate(deals, start=1):
+        lines.append(
+            telegram.batch_link_format.format(index=index, url=deal_link_url(deal))
+        )
+    return "\n".join(lines).strip()
+
+
+def resolve_batch_photo_url(deals: list[Deal], telegram: TelegramConfig) -> str | None:
+    photo = telegram.batch_photo_url.strip()
+    if not photo:
+        photo = os.environ.get(telegram.batch_photo_url_env, "").strip()
+    if photo:
+        return photo
+    if telegram.batch_use_deal_image:
+        for deal in deals:
+            if deal.image_url:
+                return deal.image_url
+    return None
+
+
 def save_whatsapp_messages(messages: list[str], output_file: Path) -> None:
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("\n\n---\n\n".join(messages) + ("\n" if messages else ""), encoding="utf-8")
@@ -577,6 +652,68 @@ def send_telegram_message(
             raise ValueError(result)
 
 
+def send_telegram_photo(
+    token: str,
+    chat_id: str,
+    photo: str,
+    caption: str,
+    telegram: TelegramConfig,
+) -> None:
+    api_url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    fields: dict[str, str] = {
+        "chat_id": chat_id,
+        "photo": photo,
+        "caption": caption,
+        "disable_web_page_preview": str(telegram.disable_web_page_preview).lower(),
+    }
+    payload = urllib.parse.urlencode(fields).encode("utf-8")
+    request = urllib.request.Request(api_url, data=payload, method="POST")
+    with urllib.request.urlopen(request, timeout=telegram.timeout_seconds) as response:
+        body = response.read().decode("utf-8")
+        result = json.loads(body)
+        if not result.get("ok"):
+            raise ValueError(result)
+
+
+def post_batches_to_telegram(
+    deals: list[Deal],
+    hashtags: list[str],
+    telegram: TelegramConfig,
+    dry_run: bool = False,
+) -> tuple[int, int, list[str]]:
+    if dry_run or not telegram.enabled or not deals:
+        return 0, 0, []
+
+    token = os.environ.get(telegram.bot_token_env)
+    chat_id = os.environ.get(telegram.chat_id_env)
+    if not token or not chat_id:
+        message = (
+            f"Telegram skipped: set {telegram.bot_token_env} and "
+            f"{telegram.chat_id_env} to auto-post."
+        )
+        if telegram.required:
+            batches = chunk_deals(deals, telegram.batch_size)
+            return 0, len(batches), [message]
+        return 0, 0, [message]
+
+    posted = 0
+    failed = 0
+    errors: list[str] = []
+    for batch in chunk_deals(deals, telegram.batch_size):
+        caption = format_batch_caption(batch, hashtags, telegram)
+        photo = resolve_batch_photo_url(batch, telegram)
+        try:
+            if photo:
+                send_telegram_photo(token, chat_id, photo, caption, telegram)
+            else:
+                send_telegram_message(token, chat_id, caption, telegram)
+            posted += 1
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
+            failed += 1
+            errors.append(f"Telegram batch post failed: {exc}")
+    return posted, failed, errors
+
+
 def run_workflow(
     config: WorkflowConfig,
     dry_run: bool = False,
@@ -619,9 +756,14 @@ def run_workflow(
 
     if skip_telegram:
         config.telegram.enabled = False
-    posted, failed, errors = post_messages_to_telegram(
-        telegram_messages, config.telegram, dry_run=dry_run
-    )
+    if config.telegram.post_style == "batch":
+        posted, failed, errors = post_batches_to_telegram(
+            accepted, config.hashtags, config.telegram, dry_run=dry_run
+        )
+    else:
+        posted, failed, errors = post_messages_to_telegram(
+            telegram_messages, config.telegram, dry_run=dry_run
+        )
     summary.telegram_posted = posted
     summary.telegram_failed = failed
     summary.errors.extend(errors)

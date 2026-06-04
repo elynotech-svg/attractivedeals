@@ -18,7 +18,9 @@
       "coupon_field": "coupon",
       "category_field": "category",
       "description_field": "description",
-      "currency": "Rs. "
+      "currency": "Rs. ",
+      "short_url_field": "short_url",
+      "image_url_field": "image_url"
     }
   ],
   "affiliate": {
@@ -63,7 +65,14 @@
     "chat_id_env": "TELEGRAM_CHAT_ID",
     "disable_web_page_preview": true,
     "timeout_seconds": 15,
-    "required": false
+    "required": false,
+    "post_style": "batch",
+    "batch_size": 3,
+    "batch_headline": "#flipkart #grocery #looto",
+    "batch_headline_template": "{headline} : Upto {max_discount}% Off",
+    "batch_photo_url": "${TELEGRAM_BATCH_PHOTO_URL:-}",
+    "batch_use_deal_image": true,
+    "batch_link_format": "Link {index} : {url}"
   },
   "whatsapp": {
     "output_file": "out/whatsapp_deals.txt"

@@ -133,6 +133,40 @@ class DealsChannelTests(unittest.TestCase):
         self.assertNotIn("Long marketing copy", text)
         self.assertFalse(any(line.startswith("http") for line in text.splitlines()))
 
+
+    def test_format_batch_caption_uses_numbered_short_links(self):
+        from scripts.deals_channel import Deal, format_batch_caption, TelegramConfig
+
+        deals = [
+            Deal(
+                source="sheet",
+                title="Jelly 94% off",
+                url="https://linksredirect.com/long",
+                short_url="https://fkrt.cc/abc",
+                discount_percent=94,
+            ),
+            Deal(
+                source="sheet",
+                title="Oats 52% off",
+                url="https://linksredirect.com/long2",
+                short_url="https://fkrt.cc/def",
+                discount_percent=52,
+            ),
+        ]
+        caption = format_batch_caption(
+            deals,
+            ["#flipkart", "#grocery", "#looto"],
+            TelegramConfig(
+                batch_headline="#flipkart #grocery #looto",
+                batch_headline_template="{headline} : Upto {max_discount}% Off",
+            ),
+        )
+
+        self.assertIn("#flipkart #grocery #looto : Upto 94% Off", caption)
+        self.assertIn("Link 1 : https://fkrt.cc/abc", caption)
+        self.assertIn("Link 2 : https://fkrt.cc/def", caption)
+        self.assertNotIn("linksredirect.com", caption)
+
     def test_run_workflow_writes_whatsapp_file_without_telegram(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             feed_file = Path(tmp_dir) / "feed.json"
