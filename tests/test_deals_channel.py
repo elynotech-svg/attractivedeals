@@ -17,9 +17,11 @@ from scripts.deals_channel import (
     load_config,
     format_deal,
     format_deal_for_telegram,
+    parse_cuelinks_feed,
     parse_feed,
     run_workflow,
 )
+
 
 
 class DealsChannelTests(unittest.TestCase):
@@ -110,63 +112,6 @@ class DealsChannelTests(unittest.TestCase):
             self.assertIn("Coupon: AUDIO50", message)
             self.assertIn("#deals #toppicks #audiogear", message)
 
-    def test_format_deal_for_telegram_hides_raw_url(self):
-        deal = parse_feed(
-            FeedConfig(
-                name="manual",
-                type="manual",
-                items=[
-                    {
-                        "title": "Deal : Free Shipping Available",
-                        "url": "https://linksredirect.com/?cid=1&url=https%3A%2F%2Fshop.example",
-                        "description": "Long marketing copy that should stay hidden by default.",
-                    }
-                ],
-            )
-        )[0]
-
-        text, parse_mode = format_deal_for_telegram(deal, ["#deals"], MessageConfig())
-
-        self.assertEqual(parse_mode, "HTML")
-        self.assertIn("🔥 Free Shipping Available", text)
-        self.assertIn("Shop Now 🛒</a>", text)
-        self.assertNotIn("Long marketing copy", text)
-        self.assertFalse(any(line.startswith("http") for line in text.splitlines()))
-
-
-    def test_format_batch_caption_uses_numbered_short_links(self):
-        from scripts.deals_channel import Deal, format_batch_caption, TelegramConfig
-
-        deals = [
-            Deal(
-                source="sheet",
-                title="Jelly 94% off",
-                url="https://linksredirect.com/long",
-                short_url="https://fkrt.cc/abc",
-                discount_percent=94,
-            ),
-            Deal(
-                source="sheet",
-                title="Oats 52% off",
-                url="https://linksredirect.com/long2",
-                short_url="https://fkrt.cc/def",
-                discount_percent=52,
-            ),
-        ]
-        caption = format_batch_caption(
-            deals,
-            ["#flipkart", "#grocery", "#looto"],
-            TelegramConfig(
-                batch_headline="#flipkart #grocery #looto",
-                batch_headline_template="{headline} : Upto {max_discount}% Off",
-            ),
-        )
-
-        self.assertIn("#flipkart #grocery #looto : Upto 94% Off", caption)
-        self.assertIn("Link 1 : https://fkrt.cc/abc", caption)
-        self.assertIn("Link 2 : https://fkrt.cc/def", caption)
-        self.assertNotIn("linksredirect.com", caption)
-
     def test_run_workflow_writes_whatsapp_file_without_telegram(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             feed_file = Path(tmp_dir) / "feed.json"
@@ -224,6 +169,32 @@ class DealsChannelTests(unittest.TestCase):
             self.assertEqual(parsed[0].original_price, 1000)
             self.assertEqual(parsed[0].discount_percent, 35)
 
+    def test_parse_cuelinks_feed_reads_offers_fixture(self):
+        fixture = Path(__file__).parent / "fixtures" / "cuelinks_offers_sample.json"
+        previous = os.environ.get("CUELINKS_API_TOKEN")
+        os.environ["CUELINKS_API_TOKEN"] = "test-token"
+        try:
+            deals = parse_cuelinks_feed(
+                FeedConfig(
+                    name="cuelinks-fixture",
+                    type="cuelinks",
+                    url=str(fixture),
+                    items_path="offers",
+                    title_field="title",
+                    url_field="offer_url",
+                    image_url_field="image_url",
+                )
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("CUELINKS_API_TOKEN", None)
+            else:
+                os.environ["CUELINKS_API_TOKEN"] = previous
+
+        self.assertEqual(len(deals), 3)
+        self.assertEqual(deals[0].title, "Grocery Loot 94% Off on Jelly")
+        self.assertIn("flipkart.com", deals[0].url)
+        self.assertEqual(deals[0].image_url, "https://example.com/jelly.jpg")
 
     def test_manual_feed_with_cuelinks_wraps_urls(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

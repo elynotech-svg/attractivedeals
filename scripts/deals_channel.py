@@ -48,6 +48,7 @@ class FeedConfig:
     description_field: str = "description"
     short_url_field: str = "short_url"
     image_url_field: str = "image_url"
+    api_token_env: str = "CUELINKS_API_TOKEN"
     currency: str = ""
 
 
@@ -77,6 +78,7 @@ class TelegramConfig:
     batch_photo_url_env: str = "TELEGRAM_BATCH_PHOTO_URL"
     batch_use_deal_image: bool = True
     batch_link_format: str = "Link {index} : {url}"
+    batch_use_media_group: bool = True
 
 
 @dataclass
@@ -215,6 +217,8 @@ def parse_feed(feed: FeedConfig) -> list[Deal]:
     feed_type = feed.type.lower()
     if feed_type in ("manual", "inline"):
         return parse_json_items(feed, feed.items)
+    if feed_type == "cuelinks":
+        return parse_cuelinks_feed(feed)
 
     body = fetch_text(feed.url, feed.headers)
     if feed_type == "auto":
@@ -228,6 +232,28 @@ def parse_feed(feed: FeedConfig) -> list[Deal]:
     if feed_type in ("rss", "atom", "xml"):
         return parse_xml_feed(feed, body)
     raise ValueError(f"Unsupported feed type for {feed.name}: {feed.type}")
+
+
+def build_cuelinks_api_headers(feed: FeedConfig) -> dict[str, str]:
+    token = os.environ.get(feed.api_token_env, "").strip()
+    if not token:
+        raise ValueError(
+            f"Set {feed.api_token_env} to fetch offers from Cuelinks feed {feed.name}."
+        )
+    headers = {key: str(value) for key, value in feed.headers.items()}
+    headers.pop("token_env", None)
+    headers["Authorization"] = f'Token token="{token}"'
+    headers.setdefault("Accept", "application/json")
+    headers.setdefault("User-Agent", DEFAULT_USER_AGENT)
+    return headers
+
+
+def parse_cuelinks_feed(feed: FeedConfig) -> list[Deal]:
+    if not feed.url:
+        raise ValueError(f"Cuelinks feed {feed.name} requires offers API URL in url.")
+    headers = build_cuelinks_api_headers(feed)
+    body = fetch_text(feed.url, headers)
+    return parse_json_feed(feed, body)
 
 
 def parse_json_feed(feed: FeedConfig, body: str) -> list[Deal]:
@@ -248,9 +274,13 @@ def parse_json_items(feed: FeedConfig, items: list[Any]) -> list[Deal]:
         )
         url = first_text(
             get_nested(item, feed.url_field),
+            get_nested(item, "offer_url"),
+            get_nested(item, "landing_page_url"),
+            get_nested(item, "click_url"),
             get_nested(item, "link"),
             get_nested(item, "deeplink"),
             get_nested(item, "affiliate_url"),
+            get_nested(item, "tracking_url"),
         )
         if not title or not url:
             continue
@@ -273,10 +303,24 @@ def parse_json_items(feed: FeedConfig, items: list[Any]) -> list[Deal]:
                 original_price=original_price,
                 discount_percent=discount_percent,
                 coupon=clean_optional_text(get_nested(item, feed.coupon_field)),
-                category=clean_optional_text(get_nested(item, feed.category_field)),
+                category=clean_optional_text(
+                    first_text(
+                        get_nested(item, feed.category_field),
+                        get_nested(item, "merchant_name"),
+                        get_nested(item, "merchant"),
+                    )
+                ),
                 description=clean_optional_text(get_nested(item, feed.description_field)),
                 short_url=clean_optional_text(get_nested(item, feed.short_url_field)),
-                image_url=clean_optional_text(get_nested(item, feed.image_url_field)),
+                image_url=clean_optional_text(
+                    first_text(
+                        get_nested(item, feed.image_url_field),
+                        get_nested(item, "image"),
+                        get_nested(item, "banner_url"),
+                        get_nested(item, "thumbnail"),
+                        get_nested(item, "image_link"),
+                    )
+                ),
                 currency=feed.currency,
             )
         )
@@ -329,7 +373,7 @@ def extract_items(payload: Any, items_path: str | None) -> list[Any]:
     if isinstance(payload, list):
         return payload
     if isinstance(payload, dict):
-        for key in ("items", "deals", "products", "data", "results"):
+        for key in ("offers", "items", "deals", "products", "data", "results"):
             value = payload.get(key)
             if isinstance(value, list):
                 return value
@@ -703,7 +747,14 @@ def post_batches_to_telegram(
         caption = format_batch_caption(batch, hashtags, telegram)
         photo = resolve_batch_photo_url(batch, telegram)
         try:
-            if photo:
+            album = (
+                batch_deal_photo_urls(batch, telegram.batch_size)
+                if telegram.batch_use_media_group
+                else []
+            )
+            if len(album) >= 2:
+                send_telegram_media_group(token, chat_id, album, caption, telegram)
+            elif photo:
                 send_telegram_photo(token, chat_id, photo, caption, telegram)
             else:
                 send_telegram_message(token, chat_id, caption, telegram)
@@ -713,6 +764,47 @@ def post_batches_to_telegram(
             errors.append(f"Telegram batch post failed: {exc}")
     return posted, failed, errors
 
+
+
+
+def batch_deal_photo_urls(deals: list[Deal], limit: int) -> list[str]:
+    urls: list[str] = []
+    for deal in deals:
+        if deal.image_url and deal.image_url not in urls:
+            urls.append(deal.image_url)
+        if len(urls) >= limit:
+            break
+    return urls
+
+
+def send_telegram_media_group(
+    token: str,
+    chat_id: str,
+    photo_urls: list[str],
+    caption: str,
+    telegram: TelegramConfig,
+) -> None:
+    if not photo_urls:
+        raise ValueError("At least one photo URL is required for media groups.")
+    media: list[dict[str, str]] = []
+    for index, photo in enumerate(photo_urls):
+        entry: dict[str, str] = {"type": "photo", "media": photo}
+        if index == len(photo_urls) - 1:
+            entry["caption"] = caption
+        media.append(entry)
+    api_url = f"https://api.telegram.org/bot{token}/sendMediaGroup"
+    payload = urllib.parse.urlencode(
+        {
+            "chat_id": chat_id,
+            "media": json.dumps(media),
+        }
+    ).encode("utf-8")
+    request = urllib.request.Request(api_url, data=payload, method="POST")
+    with urllib.request.urlopen(request, timeout=telegram.timeout_seconds) as response:
+        body = response.read().decode("utf-8")
+        result = json.loads(body)
+        if not result.get("ok"):
+            raise ValueError(result)
 
 def run_workflow(
     config: WorkflowConfig,
@@ -728,7 +820,7 @@ def run_workflow(
         if not feed.enabled:
             summary.skipped_feeds.append(f"{feed.name}: disabled")
             continue
-        if feed.type.lower() not in ("manual", "inline") and not feed.url:
+        if feed.type.lower() not in ("manual", "inline", "cuelinks") and not feed.url:
             summary.skipped_feeds.append(f"{feed.name}: missing feed URL")
             continue
         try:

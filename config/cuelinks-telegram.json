@@ -1,0 +1,58 @@
+{
+  "_notes": [
+    "Fully automated loot-style posts: fetch live offers from Cuelinks API, wrap with your channel ID, batch to Telegram.",
+    "Requires CUELINKS_API_TOKEN (request from sales@cuelinks.com) and CUELINKS_CHANNEL_ID.",
+    "Static headline/hashtags are configured below — no Google Sheet needed."
+  ],
+  "feeds": [
+    {
+      "name": "cuelinks-live-offers",
+      "type": "cuelinks",
+      "enabled": true,
+      "url": "https://www.cuelinks.com/api/v2/offers.json?page=1&per_page=30",
+      "items_path": "offers",
+      "title_field": "title",
+      "url_field": "offer_url",
+      "image_url_field": "image_url",
+      "description_field": "description",
+      "category_field": "category",
+      "coupon_field": "coupon_code",
+      "api_token_env": "CUELINKS_API_TOKEN"
+    }
+  ],
+  "affiliate": {
+    "enabled": true,
+    "network": "cuelinks",
+    "channel_id_env": "CUELINKS_CHANNEL_ID",
+    "source": "linkkit",
+    "required": true
+  },
+  "filters": {
+    "min_discount_percent": 20,
+    "min_savings_amount": 0,
+    "require_discount_data": false,
+    "blocked_keywords": ["expired", "out of stock"],
+    "max_items": 9
+  },
+  "hashtags": ["#deals", "#offers", "#looto"],
+  "message": {
+    "include_description": false,
+    "telegram_hide_raw_url": true
+  },
+  "telegram": {
+    "enabled": true,
+    "bot_token_env": "TELEGRAM_BOT_TOKEN",
+    "chat_id_env": "TELEGRAM_CHAT_ID",
+    "post_style": "batch",
+    "batch_size": 3,
+    "batch_headline": "#deals #offers #looto",
+    "batch_link_format": "Link {index} : {url}",
+    "batch_use_media_group": true,
+    "batch_use_deal_image": true,
+    "disable_web_page_preview": true,
+    "required": false
+  },
+  "whatsapp": {
+    "output_file": "out/whatsapp_deals.txt"
+  }
+}

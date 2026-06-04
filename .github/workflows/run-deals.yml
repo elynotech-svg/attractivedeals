@@ -97,7 +97,7 @@ jobs:
             fi
           else
             echo "limit=10" >> "$GITHUB_OUTPUT"
-            echo "config_path=config/google-sheet-cuelinks.json" >> "$GITHUB_OUTPUT"
+            echo "config_path=config/cuelinks-telegram.json" >> "$GITHUB_OUTPUT"
             echo "telegram_flag=" >> "$GITHUB_OUTPUT"
             echo "affiliate_flag=" >> "$GITHUB_OUTPUT"
           fi

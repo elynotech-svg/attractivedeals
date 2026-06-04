@@ -1,0 +1,23 @@
+{
+  "offers": [
+    {
+      "title": "Grocery Loot 94% Off on Jelly",
+      "offer_url": "https://www.flipkart.com/grocery/product-jelly",
+      "image_url": "https://example.com/jelly.jpg",
+      "merchant_name": "Flipkart Grocery",
+      "description": "Limited time offer"
+    },
+    {
+      "title": "Oats 52% Off",
+      "offer_url": "https://www.flipkart.com/grocery/product-oats",
+      "image_url": "https://example.com/oats.jpg",
+      "merchant_name": "Flipkart Grocery"
+    },
+    {
+      "title": "Bay Leaf 70% Off",
+      "offer_url": "https://www.flipkart.com/grocery/product-spice",
+      "image_url": "https://example.com/spice.jpg",
+      "merchant_name": "Flipkart Grocery"
+    }
+  ]
+}

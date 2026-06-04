@@ -12,6 +12,42 @@ affiliate deals channel:
 The workflow intentionally does not use a database. It deduplicates deals only
 within each run.
 
+## Automated Cuelinks → Telegram (no Google Sheet)
+
+Use `config/cuelinks-telegram.json` for a **fully automated** loot-style channel:
+
+1. Cuelinks **Offers API** supplies live deals (title, URL, image).
+2. Your **Channel ID** wraps links for tracking.
+3. Telegram receives **batched posts** (3 deals per message) with a **static headline** and numbered links.
+4. Product images from the API are sent as a Telegram **album** when available.
+
+### Secrets (GitHub Actions or local)
+
+| Secret / env | Purpose |
+|--------------|---------|
+| `CUELINKS_API_TOKEN` | Offers API token from Cuelinks ([request via sales@cuelinks.com](mailto:sales@cuelinks.com); publisher eligibility applies) |
+| `CUELINKS_CHANNEL_ID` | Your channel ID (dashboard → Account → My Channels) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot |
+| `TELEGRAM_CHAT_ID` | Channel or group ID |
+
+### Run
+
+```bash
+export CUELINKS_API_TOKEN="your-api-token"
+export CUELINKS_CHANNEL_ID="your-channel-id"
+export TELEGRAM_BOT_TOKEN="your-bot-token"
+export TELEGRAM_CHAT_ID="@your_channel"
+python3 scripts/deals_channel.py --config config/cuelinks-telegram.json
+```
+
+Edit **static** copy in the config only (no sheet):
+
+- `hashtags` and `telegram.batch_headline` — e.g. `#deals #offers #looto`
+- `telegram.batch_size` — deals per post (default `3`)
+- `filters` — minimum discount, blocked keywords, `max_items`
+
+Optional query params on the feed URL (in config) for category or merchant filters, per [Cuelinks API docs](https://cuelinks.docs.apiary.io/).
+
 ## Quick start
 
 Best simple setup:
@@ -241,6 +277,56 @@ python3 scripts/deals_channel.py \
   --limit 1 \
   --skip-affiliate
 ```
+
+## Batch posts with image (Telegram loot style)
+
+To post like a deals channel collage (one image + hashtag headline + numbered short links),
+set `telegram.post_style` to `"batch"` in your config.
+
+Example (`config/google-sheet-cuelinks.json`):
+
+```json
+"telegram": {
+  "post_style": "batch",
+  "batch_size": 3,
+  "batch_headline": "#flipkart #grocery #looto",
+  "batch_photo_url": "${TELEGRAM_BATCH_PHOTO_URL:-}",
+  "batch_use_deal_image": true,
+  "batch_link_format": "Link {index} : {url}",
+  "disable_web_page_preview": true
+}
+```
+
+### Google Sheet columns
+
+Add these optional columns (in addition to `title` and `url`):
+
+| Column | Purpose |
+|--------|---------|
+| `short_url` | Clean link shown in the post (e.g. `https://fkrt.cc/...` from Flipkart affiliate) |
+| `image_url` | Product image URL (used when no batch collage image is set) |
+
+If `short_url` is empty, the script uses the Cuelinks-wrapped `url`.
+
+### Collage image
+
+The product collage at the top is **not auto-generated** yet. You typically:
+
+1. Build a screenshot/collage in Canva or from Flipkart (3 products side by side).
+2. Upload it somewhere public (Google Drive direct link, Imgur, your site).
+3. Set `TELEGRAM_BATCH_PHOTO_URL` to that image URL in GitHub Actions secrets.
+
+Telegram will post **one photo per batch** (default 3 deals) with a caption like:
+
+```text
+#flipkart #grocery #looto : Upto 94% Off
+
+Link 1 : https://fkrt.cc/abc
+Link 2 : https://fkrt.cc/def
+Link 3 : https://fkrt.cc/ghi
+```
+
+Set `post_style` to `"per_deal"` to go back to one message per product.
 
 ## Cleaner Telegram messages
 
