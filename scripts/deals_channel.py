@@ -75,6 +75,20 @@ class WhatsAppConfig:
 
 
 @dataclass
+class MessageConfig:
+    """Controls how deal copy is shown to readers."""
+
+    include_description: bool = False
+    title_prefix: str = "🔥 "
+    strip_title_prefixes: list[str] = field(
+        default_factory=lambda: ["Deal : ", "Deal: ", "Deal :"]
+    )
+    telegram_link_text: str = "Shop Now 🛒"
+    telegram_hide_raw_url: bool = True
+    include_url_in_whatsapp: bool = True
+
+
+@dataclass
 class AffiliateConfig:
     enabled: bool = False
     network: str = "none"
@@ -89,6 +103,7 @@ class WorkflowConfig:
     feeds: list[FeedConfig]
     filters: FilterConfig = field(default_factory=FilterConfig)
     hashtags: list[str] = field(default_factory=lambda: ["#deals"])
+    message: MessageConfig = field(default_factory=MessageConfig)
     affiliate: AffiliateConfig = field(default_factory=AffiliateConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     whatsapp: WhatsAppConfig = field(default_factory=WhatsAppConfig)
@@ -139,6 +154,7 @@ def load_config(path: Path) -> WorkflowConfig:
         feeds=feeds,
         filters=FilterConfig(**raw.get("filters", {})),
         hashtags=raw.get("hashtags", ["#deals"]),
+        message=MessageConfig(**raw.get("message", {})),
         affiliate=AffiliateConfig(**raw.get("affiliate", {})),
         telegram=TelegramConfig(**raw.get("telegram", {})),
         whatsapp=WhatsAppConfig(**raw.get("whatsapp", {})),
@@ -394,8 +410,17 @@ def is_strong_enough(deal: Deal, filters: FilterConfig) -> bool:
     return not filters.require_discount_data and not has_discount_signal
 
 
-def format_deal(deal: Deal, hashtags: list[str]) -> str:
-    lines = [f"🔥 {deal.title}"]
+def clean_title(title: str, message: MessageConfig) -> str:
+    cleaned = title.strip()
+    for prefix in message.strip_title_prefixes:
+        if cleaned.lower().startswith(prefix.lower()):
+            cleaned = cleaned[len(prefix) :].strip()
+    return cleaned
+
+
+def build_deal_body_lines(deal: Deal, message: MessageConfig) -> list[str]:
+    title = clean_title(deal.title, message)
+    lines = [f"{message.title_prefix}{title}".rstrip()]
 
     price_line = build_price_line(deal)
     if price_line:
@@ -409,17 +434,57 @@ def format_deal(deal: Deal, hashtags: list[str]) -> str:
     if deal.coupon:
         lines.append(f"Coupon: {deal.coupon}")
 
-    summary = summarize(deal.description)
-    if summary:
-        lines.append(summary)
+    if message.include_description:
+        summary = summarize(deal.description)
+        if summary:
+            lines.append(summary)
 
-    lines.append(deal.url)
+    return lines
+
+
+def format_deal(
+    deal: Deal,
+    hashtags: list[str],
+    message: MessageConfig | None = None,
+) -> str:
+    """Plain-text message for WhatsApp copy files."""
+    message = message or MessageConfig()
+    lines = build_deal_body_lines(deal, message)
+
+    if message.include_url_in_whatsapp:
+        lines.append(deal.url)
 
     tags = build_hashtags(hashtags, deal.category)
     if tags:
         lines.append(" ".join(tags))
 
     return "\n".join(lines)
+
+
+def format_deal_for_telegram(
+    deal: Deal,
+    hashtags: list[str],
+    message: MessageConfig | None = None,
+) -> tuple[str, str | None]:
+    """Telegram message text and optional parse_mode (HTML when the URL is hidden)."""
+    message = message or MessageConfig()
+    body_lines = build_deal_body_lines(deal, message)
+    tags = build_hashtags(hashtags, deal.category)
+
+    if message.telegram_hide_raw_url:
+        lines = [html.escape(line) for line in body_lines]
+        link_href = html.escape(deal.url, quote=True)
+        link_label = html.escape(message.telegram_link_text)
+        lines.append(f'<a href="{link_href}">{link_label}</a>')
+        if tags:
+            lines.append(" ".join(html.escape(tag) for tag in tags))
+        return "\n".join(lines), "HTML"
+
+    lines = list(body_lines)
+    lines.append(deal.url)
+    if tags:
+        lines.append(" ".join(tags))
+    return "\n".join(lines), None
 
 
 def build_price_line(deal: Deal) -> str | None:
@@ -457,7 +522,7 @@ def save_whatsapp_messages(messages: list[str], output_file: Path) -> None:
 
 
 def post_messages_to_telegram(
-    messages: list[str],
+    messages: list[tuple[str, str | None]],
     telegram: TelegramConfig,
     dry_run: bool = False,
 ) -> tuple[int, int, list[str]]:
@@ -478,9 +543,9 @@ def post_messages_to_telegram(
     posted = 0
     failed = 0
     errors: list[str] = []
-    for message in messages:
+    for text, parse_mode in messages:
         try:
-            send_telegram_message(token, chat_id, message, telegram)
+            send_telegram_message(token, chat_id, text, telegram, parse_mode=parse_mode)
             posted += 1
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as exc:
             failed += 1
@@ -493,15 +558,17 @@ def send_telegram_message(
     chat_id: str,
     text: str,
     telegram: TelegramConfig,
+    parse_mode: str | None = None,
 ) -> None:
     api_url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = urllib.parse.urlencode(
-        {
-            "chat_id": chat_id,
-            "text": text,
-            "disable_web_page_preview": str(telegram.disable_web_page_preview).lower(),
-        }
-    ).encode("utf-8")
+    fields: dict[str, str] = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": str(telegram.disable_web_page_preview).lower(),
+    }
+    if parse_mode:
+        fields["parse_mode"] = parse_mode
+    payload = urllib.parse.urlencode(fields).encode("utf-8")
     request = urllib.request.Request(api_url, data=payload, method="POST")
     with urllib.request.urlopen(request, timeout=telegram.timeout_seconds) as response:
         body = response.read().decode("utf-8")
@@ -540,14 +607,21 @@ def run_workflow(
     summary.skipped = summary.fetched - summary.accepted
     summary.errors.extend(affiliate_errors)
 
-    messages = [format_deal(deal, config.hashtags) for deal in accepted]
+    whatsapp_messages = [
+        format_deal(deal, config.hashtags, config.message) for deal in accepted
+    ]
+    telegram_messages = [
+        format_deal_for_telegram(deal, config.hashtags, config.message) for deal in accepted
+    ]
     output_file = Path(output_override or config.whatsapp.output_file)
-    save_whatsapp_messages(messages, output_file)
+    save_whatsapp_messages(whatsapp_messages, output_file)
     summary.whatsapp_file = str(output_file)
 
     if skip_telegram:
         config.telegram.enabled = False
-    posted, failed, errors = post_messages_to_telegram(messages, config.telegram, dry_run=dry_run)
+    posted, failed, errors = post_messages_to_telegram(
+        telegram_messages, config.telegram, dry_run=dry_run
+    )
     summary.telegram_posted = posted
     summary.telegram_failed = failed
     summary.errors.extend(errors)

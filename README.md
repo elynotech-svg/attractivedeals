@@ -242,6 +242,35 @@ python3 scripts/deals_channel.py \
   --skip-affiliate
 ```
 
+## Cleaner Telegram messages
+
+By default, configs hide the long Cuelinks URL and marketing description from
+Telegram posts. Readers see a short title, price/discount lines, and a
+**Shop Now** button instead of the full redirect link.
+
+Control this in the `message` section of your config:
+
+```json
+"message": {
+  "include_description": false,
+  "strip_title_prefixes": ["Deal : ", "Deal: "],
+  "telegram_link_text": "Shop Now 🛒",
+  "telegram_hide_raw_url": true
+},
+"telegram": {
+  "disable_web_page_preview": true
+}
+```
+
+Set `include_description` to `true` if you want the sheet `description` column
+included. Set `telegram_hide_raw_url` to `false` to show the full URL again.
+
+The WhatsApp output file (`out/whatsapp_deals.txt`) still includes the full URL
+so you can copy-paste when sharing manually.
+
+To drop low-value promos (for example free-shipping-only rows with no discount),
+tighten `filters` or add `blocked_keywords` such as `"free shipping"`.
+
 ## Telegram posting
 
 Create a Telegram bot and set these environment variables before running without

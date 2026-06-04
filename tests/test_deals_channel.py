@@ -8,6 +8,7 @@ from scripts.deals_channel import (
     AffiliateConfig,
     FeedConfig,
     FilterConfig,
+    MessageConfig,
     TelegramConfig,
     WhatsAppConfig,
     WorkflowConfig,
@@ -15,6 +16,7 @@ from scripts.deals_channel import (
     filter_deals,
     load_config,
     format_deal,
+    format_deal_for_telegram,
     parse_feed,
     run_workflow,
 )
@@ -107,6 +109,29 @@ class DealsChannelTests(unittest.TestCase):
             self.assertIn("Price: Rs. 999 (was Rs. 1,998)", message)
             self.assertIn("Coupon: AUDIO50", message)
             self.assertIn("#deals #toppicks #audiogear", message)
+
+    def test_format_deal_for_telegram_hides_raw_url(self):
+        deal = parse_feed(
+            FeedConfig(
+                name="manual",
+                type="manual",
+                items=[
+                    {
+                        "title": "Deal : Free Shipping Available",
+                        "url": "https://linksredirect.com/?cid=1&url=https%3A%2F%2Fshop.example",
+                        "description": "Long marketing copy that should stay hidden by default.",
+                    }
+                ],
+            )
+        )[0]
+
+        text, parse_mode = format_deal_for_telegram(deal, ["#deals"], MessageConfig())
+
+        self.assertEqual(parse_mode, "HTML")
+        self.assertIn("🔥 Free Shipping Available", text)
+        self.assertIn("Shop Now 🛒</a>", text)
+        self.assertNotIn("Long marketing copy", text)
+        self.assertFalse(any(line.startswith("http") for line in text.splitlines()))
 
     def test_run_workflow_writes_whatsapp_file_without_telegram(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
